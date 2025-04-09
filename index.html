@@ -3,12 +3,165 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>My first three.js app</title>
+    <title>Hand Tracking with Three.js</title>
     <style>
-        body { margin: 0; }
+        body {
+            margin: 0;
+            overflow: hidden;
+        }
+        canvas {
+            display: block;
+        }
+        #webcam {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            width: 200px; /* Adjust size here */
+            height: auto; /* Maintain aspect ratio */
+            opacity: 0.8; /* Optional for transparency */
+            z-index: 10; /* Ensure it appears above the Three.js canvas */
+            border: 2px solid white; /* Optional styling */
+        }
+        #webcamCanvas {
+            display: none; /* Hide the processing canvas */
+        }
     </style>
 </head>
 <body>
-    <script type="module" src="/main.js"></script>
+    <!-- Visible webcam video -->
+    <video id="webcam" autoplay playsinline></video>
+    <!-- Hidden canvas for processing webcam frames -->
+    <canvas id="webcamCanvas"></canvas>
+    <script type="module">
+        import * as THREE from 'https://cdnjs.cloudflare.com/ajax/libs/three.js/0.155.0/three.module.min.js';
+        import { HandLandmarker, FilesetResolver } from 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0';
+
+        // Three.js setup
+        let scene, camera, renderer, sphere, pointLight;
+        function initScene() {
+            scene = new THREE.Scene();
+
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.z = 5;
+
+            renderer = new THREE.WebGLRenderer();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.body.appendChild(renderer.domElement);
+
+            // Add a sphere
+            const geometry = new THREE.SphereGeometry(1, 32, 32);
+            const material = new THREE.MeshStandardMaterial({ color: 0xff0000 });
+            sphere = new THREE.Mesh(geometry, material);
+            scene.add(sphere);
+
+            // Add lighting
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.5); // Soft ambient light
+            scene.add(ambientLight);
+
+            pointLight = new THREE.PointLight(0xffffff, 1, 100); // Focused light on the sphere
+            pointLight.position.set(3, 2, 5); // Set light position
+            scene.add(pointLight);
+
+            // Optional: Add a helper to visualize the light source
+            const lightHelper = new THREE.PointLightHelper(pointLight);
+            scene.add(lightHelper);
+        }
+
+        // Webcam setup
+        async function setupWebcam() {
+            const webcam = document.getElementById("webcam");
+            const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+            webcam.srcObject = stream;
+            return new Promise((resolve) => {
+                webcam.onloadedmetadata = () => {
+                    resolve(webcam);
+                };
+            });
+        }
+
+        // Hand tracking setup
+        let handLandmarker, lastPinchDistance = null;
+        async function setupHandTracking() {
+            const vision = await FilesetResolver.forVisionTasks(
+                "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm"
+            );
+            handLandmarker = await HandLandmarker.createFromOptions(vision, {
+                baseOptions: {
+                    modelAssetPath: `https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task`,
+                },
+                runningMode: "IMAGE", 
+                numHands: 1
+            });
+        }
+
+        function detectPinchAndResize(landmarks) {
+            if (!landmarks) return;
+
+            // Thumb tip (landmark #4) and index finger tip (landmark #8)
+            const thumbTip = landmarks[4];
+            const indexTip = landmarks[8];
+
+            // Calculate the distance between thumb and index finger
+            const distance = Math.sqrt(
+                Math.pow(thumbTip.x - indexTip.x, 2) +
+                Math.pow(thumbTip.y - indexTip.y, 2) +
+                Math.pow(thumbTip.z - indexTip.z, 2)
+            );
+
+            // Change sphere size based on finger distance
+            const scale = Math.max(0.5, Math.min(3, distance * 10)); // Scale between 0.5 and 3
+            sphere.scale.set(scale, scale, scale);
+
+            // Optional: Change sphere color when pinching
+            const pinchThreshold = 0.05;
+            const isPinching = distance < pinchThreshold;
+            if (isPinching && lastPinchDistance !== isPinching) {
+                sphere.material.color.set(Math.random() * 0xffffff); // Random color
+            }
+
+            lastPinchDistance = isPinching;
+        }
+
+        async function start() {
+            // Initialize Three.js scene
+            initScene();
+
+            // Setup webcam
+            const webcam = await setupWebcam();
+
+            // Setup hand tracking
+            await setupHandTracking();
+
+            // Canvas for processing video
+            const canvas = document.getElementById("webcamCanvas");
+            const ctx = canvas.getContext("2d");
+            canvas.width = webcam.videoWidth;
+            canvas.height = webcam.videoHeight;
+
+            // Animation loop
+            function animate() {
+                requestAnimationFrame(animate);
+
+                // Render the Three.js scene
+                renderer.render(scene, camera);
+
+                // Draw webcam frame onto canvas
+                ctx.drawImage(webcam, 0, 0, canvas.width, canvas.height);
+
+                // Get image data from the canvas
+                const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+
+                // Run hand tracking on the image data
+                const results = handLandmarker.detect(imageData);
+                if (results.landmarks && results.landmarks.length > 0) {
+                    detectPinchAndResize(results.landmarks[0]);
+                }
+            }
+
+            animate();
+        }
+
+        start();
+    </script>
 </body>
 </html>
